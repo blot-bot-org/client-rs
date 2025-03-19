@@ -1,6 +1,7 @@
 use std::net::TcpStream;
 use std::io::prelude::*;
 use std::time::Duration;
+use std::path::Path;
 
 mod byte_handling;
 pub mod instructions;
@@ -36,10 +37,17 @@ fn send_instructions(socket: &mut TcpStream, instruction_buffer: &Vec<u8>, curre
 
 fn main() {
     let instruction_pairs: Vec<(i16, i16)> = instructions::load_instructions("./ins.json");
-    let instruction_buffer: Vec<u8> = instructions::transform_instructions(&instruction_pairs);
+    let mut instruction_buffer: Vec<u8> = vec!();
+    // let instruction_buffer: Vec<u8> = instructions::transform_instructions(&instruction_pairs);
+
+    println!("\nBlot Bot v1.0\n----------------------------- \n |  Total instructions: {} \n |  Total instruction bytes: {}", instruction_pairs.len(), instruction_buffer.len());
+
     let mut current_idx: usize = 0;
     let mut ins_buffer_size: u32 = 0;
+    let mut start_from_ins: u32 = 0;
+    let mut paused = false;
 
+    println!("Connecting to firmware...");
     let mut stream = TcpStream::connect("192.168.0.16:8180").expect("Error opening stream");
     // stream.set_read_timeout(Some(Duration::new(10, 0)));
     let mut incoming_buffer = [0; 256];
@@ -47,23 +55,33 @@ fn main() {
     let _ = stream.write(&[0x00, 0x01]); // greeting byte
 
     loop {
-
+        
         let bytes_read = stream.read(&mut incoming_buffer);
         if bytes_read.is_err() || bytes_read.unwrap() == 0 {
-            println!("Received nothing!");
             continue;
         }
 
-        if *incoming_buffer.get(0).unwrap() != 0x02 {
-            println!("Received a byte for ANY reason.");
+        if *incoming_buffer.get(0).unwrap() == 0x03 && Path::new("./stop").exists() && !paused {
+            paused = true;
+
+            let _ = stream.write(&[0x04, 0x01]);
+            println!("Sent pause drawing packet...");
+            continue;
         }
 
         if *incoming_buffer.get(0).unwrap() == 0x01 {
             let protocol_version: u16 = byte_handling::bytes_to_u16(&incoming_buffer, 1);
-            ins_buffer_size = byte_handling::bytes_to_u32(&incoming_buffer, 3);
-            let max_motor_speed: u32 = byte_handling::bytes_to_u32(&incoming_buffer, 7);
-            let min_pulse_width: u32 = byte_handling::bytes_to_u32(&incoming_buffer, 11);
-            println!("\nFirmware feedback\n----------------------------- \n |  Drawing Started: {} \n |  Protocol Version: {}\n |  Instruction Buffer Size: {} \n |  Max Motor Speed: {} steps/sec \n |  Min Pulse Width: {} ms", "true", protocol_version, ins_buffer_size, max_motor_speed, min_pulse_width);
+            
+            start_from_ins = byte_handling::bytes_to_u32(&incoming_buffer, 3);
+            start_from_ins=4433; // manually override
+            
+            ins_buffer_size = byte_handling::bytes_to_u32(&incoming_buffer, 7);
+            let max_motor_speed: u32 = byte_handling::bytes_to_u32(&incoming_buffer, 11);
+            let min_pulse_width: u32 = byte_handling::bytes_to_u32(&incoming_buffer, 15);
+            println!("\nFirmware feedback\n----------------------------- \n |  Drawing Started: {} \n |  Protocol Version: {}\n |  Start from ins: {} \n |  Instruction Buffer Size: {} \n |  Max Motor Speed: {} steps/sec \n |  Min Pulse Width: {} ms", "true", protocol_version, start_from_ins, ins_buffer_size, max_motor_speed, min_pulse_width);
+
+            instruction_buffer = instructions::transform_instructions(&instruction_pairs[start_from_ins as usize..]);
+            println!("Generated instructions between: {} and {}", start_from_ins, (instruction_pairs.len()));
 
             current_idx = send_instructions(&mut stream, &instruction_buffer, current_idx, ins_buffer_size as usize);
         }
@@ -77,6 +95,16 @@ fn main() {
                 break;
             } else if current_idx < instruction_buffer.len() {
                 current_idx = send_instructions(&mut stream, &instruction_buffer, current_idx, ins_buffer_size as usize);
+            }
+        }
+
+        if *incoming_buffer.get(0).unwrap() == 0x04 {
+            let pause_feedback: bool = *incoming_buffer.get(1).unwrap() == 0x01;
+            let num_ins_processed: u32 = byte_handling::bytes_to_u32(&incoming_buffer, 2);
+            if pause_feedback {
+                println!("Machine has been paused.");
+                println!("Number of instructions processed: {}", num_ins_processed);
+                println!("Restart at: {}", num_ins_processed + 1);
             }
         }
 

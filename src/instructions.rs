@@ -12,7 +12,7 @@ pub fn load_instructions(path: &str) -> Vec<(i16, i16)> {
     return deserialized_instructions;
 }
 
-pub fn transform_instructions(ins: &Vec<(i16, i16)>) -> Vec<u8> {
+pub fn transform_instructions(ins: &[(i16, i16)]) -> Vec<u8> {
     let mut bin_ins: Vec<u8> = vec!();
     
     for (lm, rm) in ins {
